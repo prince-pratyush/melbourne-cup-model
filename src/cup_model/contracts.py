@@ -16,10 +16,10 @@ class Runner(Record):
     horse_id: str = Field(min_length=1)
     name: str = Field(min_length=1)
     status: Literal["active", "scratched", "unresolved"] = "active"
-    weight_kg: Number = Field(ge=40, le=80)
-    barrier_drawn: int = Field(ge=1, le=50)
+    weight_kg: Number | None = Field(default=None, ge=40, le=80)
+    barrier_drawn: int | None = Field(default=None, ge=1, le=50)
     barrier_effective: int | None = Field(default=None, ge=1, le=50)
-    age_years: Number = Field(ge=2, le=20)
+    age_years: Number | None = Field(default=None, ge=2, le=20)
     decimal_odds: Number | None = Field(default=None, gt=1)
 
 
@@ -31,18 +31,28 @@ class Snapshot(Record):
     available_at: AwareDatetime
     source: str = Field(min_length=1)
     distance_m: int = Field(ge=800, le=5000)
-    going: Number = Field(ge=1, le=10)
+    going: Number | None = Field(default=None, ge=1, le=10)
     venue: str = Field(min_length=1)
     market_operator: str | None = None
     market_at: AwareDatetime | None = None
     expected_starters: int = Field(ge=2, le=50)
     runners: tuple[Runner, ...]
     synthetic: bool = False
+    timing_provenance: Literal["recorded", "scheduled_off_reconstruction"] = "recorded"
+    retrieved_at: AwareDatetime | None = None
 
     @model_validator(mode="after")
     def validate_field(self):
-        if not self.available_at <= self.cutoff < self.scheduled_start:
-            raise ValueError("require available_at <= cutoff < scheduled_start")
+        if self.timing_provenance == "recorded":
+            if not self.available_at <= self.cutoff < self.scheduled_start:
+                raise ValueError("require available_at <= cutoff < scheduled_start")
+        elif (
+            not self.available_at == self.cutoff == self.scheduled_start
+            or self.retrieved_at is None
+        ):
+            raise ValueError(
+                "scheduled-off reconstruction needs exact quote time and retrieval time"
+            )
         ids = [r.horse_id for r in self.runners]
         if len(ids) != len(set(ids)):
             raise ValueError("duplicate horse identity")
@@ -51,7 +61,7 @@ class Snapshot(Record):
         active = [r for r in self.runners if r.status == "active"]
         if len(active) != self.expected_starters:
             raise ValueError("active field does not match expected_starters")
-        drawn = [r.barrier_drawn for r in self.runners]
+        drawn = [r.barrier_drawn for r in self.runners if r.barrier_drawn is not None]
         if len(set(drawn)) != len(drawn):
             raise ValueError("duplicate drawn barrier")
         effective = [r.barrier_effective for r in active if r.barrier_effective is not None]
@@ -70,9 +80,10 @@ class Snapshot(Record):
 class Finish(Record):
     horse_id: str = Field(min_length=1)
     position: int | None = Field(default=None, ge=1)
-    status: Literal["finished", "non_finisher", "disqualified"] = "finished"
+    status: Literal["finished", "non_finisher", "disqualified", "unplaced_unknown"] = "finished"
     rating: Number | None = None
     final_600_s: Number | None = Field(default=None, gt=0)
+    prior_market_probability: Number | None = Field(default=None, gt=0, le=1)
 
     @model_validator(mode="after")
     def validate_finish(self):
@@ -88,9 +99,12 @@ class Result(Record):
     available_at: AwareDatetime
     source: str = Field(min_length=1)
     distance_m: int = Field(ge=800, le=5000)
-    going: Number = Field(ge=1, le=10)
+    going: Number | None = Field(default=None, ge=1, le=10)
     finishes: tuple[Finish, ...]
     synthetic: bool = False
+    availability_basis: Literal["source_timestamp", "two_day_embargo_assumption"] = (
+        "source_timestamp"
+    )
 
     @model_validator(mode="after")
     def validate_result(self):

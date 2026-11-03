@@ -135,7 +135,7 @@ class TreeModel:
         return self
 
     def predict(self, race: Race) -> np.ndarray:
-        return softmax(np.asarray(self.model.predict(race.x)))
+        return softmax(np.asarray(self.model.predict(race.x, thread_count=1)))
 
     def to_dict(self):
         with tempfile.TemporaryDirectory() as directory:

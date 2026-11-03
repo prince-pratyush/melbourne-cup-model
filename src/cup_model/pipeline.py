@@ -30,7 +30,7 @@ class Forecaster:
         body = {k: v for k, v in manifest.items() if k != "model_id"}
         if manifest.get("model_id") != digest(body):
             raise ValueError("model artifact checksum mismatch")
-        if tuple(manifest["features"]) != FEATURES or manifest["format_version"] != 1:
+        if tuple(manifest["features"]) != FEATURES or manifest["format_version"] != 2:
             raise ValueError("unsupported feature schema or artifact version")
         self.manifest = manifest
         self.models = {
@@ -87,6 +87,7 @@ class Forecaster:
             "model_id": self.manifest["model_id"],
             "input_hash": race.data_hash,
             "synthetic": race.snapshot.synthetic,
+            "timing_provenance": race.snapshot.timing_provenance,
             "source": race.snapshot.source,
             "market_at": race.snapshot.market_at.isoformat() if race.market is not None else None,
             "selected_runner_components": {
@@ -132,10 +133,14 @@ def train(
     l2: float = 1,
     seed: int = 42,
     tree_iterations: int = 500,
+    allow_reconstructed: bool = False,
 ) -> Forecaster:
     snapshots = dataset.latest_snapshots(before=frozen_at)
     results = dataset.results_as_of(frozen_at)
     snapshots = [s for s in snapshots if s.race_id in results]
+    timing = sorted({s.timing_provenance for s in snapshots})
+    if timing != ["recorded"] and not allow_reconstructed:
+        raise ValueError("historical reconstruction requires --allow-reconstructed")
     days = sorted({session_date(s) for s in snapshots})
     if len(days) < 8:
         raise ValueError("need at least eight completed race days for separate fitting windows")
@@ -185,11 +190,15 @@ def train(
     temperature = fit_temperature(calibration, probabilities)
     packages = ["numpy", "scipy", "pydantic"] + (["catboost"] if trees else [])
     manifest = {
-        "format_version": 1,
+        "format_version": 2,
         "code_version": __version__,
         "features": list(FEATURES),
         "frozen_at": frozen_at.isoformat(),
         "synthetic": flags.pop(),
+        "timing_provenance": timing,
+        "result_availability_bases": sorted(
+            {results[s.race_id].availability_basis for s in snapshots}
+        ),
         "seed": seed,
         "python": platform.python_version(),
         "dependencies": {p: version(p) for p in packages},

@@ -32,6 +32,17 @@ def test_market_offset_zero_correction(dataset):
     np.testing.assert_allclose(market_probabilities([2, 4, 4]), [0.5, 0.25, 0.25])
 
 
+def test_uniform_audit_does_not_use_market_to_choose_a_favourite(dataset):
+    race = build_race(dataset, dataset.latest_snapshots()[5])
+    race.y = np.zeros(len(race.horse_ids))
+    race.y[0] = 1
+    race.market = np.arange(1, len(race.horse_ids) + 1, dtype=float)
+    race.market /= race.market.sum()
+    uniform = np.ones(len(race.horse_ids)) / len(race.horse_ids)
+    assert race_metrics(race, uniform, market_tiebreak=False)["top_one"] == 1
+    assert race_metrics(race, uniform)["top_one"] == 0
+
+
 def test_pipeline_roundtrip_reproducibility_and_ledger(dataset, tmp_path):
     target = dataset.latest_snapshots()[-1]
     model = train(dataset, target.cutoff)

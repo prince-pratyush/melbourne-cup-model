@@ -2,6 +2,8 @@ import argparse
 import json
 from pathlib import Path
 
+from cup_model.acquisition import acquire, prepare
+from cup_model.audit import historical_audit
 from cup_model.contracts import Result, Snapshot, timestamp
 from cup_model.demo import generate
 from cup_model.evaluation import backtest
@@ -14,6 +16,19 @@ from cup_model.store import Dataset, Store
 def parser():
     root = argparse.ArgumentParser(prog="cup-model")
     commands = root.add_subparsers(dest="command", required=True)
+    acquisition = commands.add_parser(
+        "acquire", help="download published racing archives and Cup fields"
+    )
+    acquisition.add_argument("--destination", required=True)
+    acquisition.add_argument("--through-year", type=int, default=2026)
+    acquisition.add_argument("--cup-start", type=int, default=2006)
+    acquisition.add_argument("--cup-end", type=int, default=2025)
+    preparation = commands.add_parser(
+        "prepare", help="validate and convert downloaded race markets"
+    )
+    preparation.add_argument("--destination", required=True)
+    preparation.add_argument("--minimum-distance", type=int, default=2000)
+    preparation.add_argument("--maximum-distance", type=int, default=3600)
     demo = commands.add_parser("demo", help="generate explicitly synthetic pipeline inputs")
     demo.add_argument("--output", required=True)
     demo.add_argument("--days", type=int, default=40)
@@ -32,11 +47,20 @@ def parser():
     audit.add_argument("--start", required=True, type=timestamp)
     audit.add_argument("--score-as-of", required=True, type=timestamp)
     audit.add_argument("--output", required=True)
-    for command in (fitting, audit):
+    fixed = commands.add_parser(
+        "audit", help="train once and evaluate a later chronological holdout"
+    )
+    fixed.add_argument("--db", required=True)
+    fixed.add_argument("--frozen-at", required=True, type=timestamp)
+    fixed.add_argument("--score-as-of", required=True, type=timestamp)
+    fixed.add_argument("--model-output", required=True)
+    fixed.add_argument("--output", required=True)
+    for command in (fitting, audit, fixed):
         command.add_argument("--trees", action="store_true")
         command.add_argument("--tree-iterations", type=int, default=500)
         command.add_argument("--l2", type=float, default=1)
         command.add_argument("--seed", type=int, default=42)
+        command.add_argument("--allow-reconstructed", action="store_true")
     prediction = commands.add_parser("predict", help="select one runner and append the ledger")
     prediction.add_argument("--db", required=True)
     prediction.add_argument("--model", required=True)
@@ -62,6 +86,13 @@ def main(argv=None):
     args = root.parse_args(argv)
     store = None
     try:
+        if args.command == "acquire":
+            catalog = acquire(args.destination, args.through_year, args.cup_start, args.cup_end)
+            write_output({"archives": len(catalog["archives"]), "cups": len(catalog["cups"])})
+            return
+        if args.command == "prepare":
+            write_output(prepare(args.destination, args.minimum_distance, args.maximum_distance))
+            return
         if args.command == "demo":
             write_output(generate(args.output, args.days, args.seed))
             return
@@ -80,7 +111,21 @@ def main(argv=None):
             write_output({"imported": store.import_jsonl(args.input)})
             return
         dataset = Dataset(store.records())
-        if args.command == "train":
+        if args.command == "audit":
+            model, report = historical_audit(
+                dataset,
+                args.frozen_at,
+                args.score_as_of,
+                trees=args.trees,
+                tree_iterations=args.tree_iterations,
+                allow_reconstructed=args.allow_reconstructed,
+                l2=args.l2,
+                seed=args.seed,
+            )
+            model.save(args.model_output)
+            write_output(report, args.output)
+            write_output({"model_id": model.manifest["model_id"], "overall": report["overall"]})
+        elif args.command == "train":
             model = train(
                 dataset,
                 args.frozen_at,
@@ -88,6 +133,7 @@ def main(argv=None):
                 l2=args.l2,
                 seed=args.seed,
                 tree_iterations=args.tree_iterations,
+                allow_reconstructed=args.allow_reconstructed,
             )
             model.save(args.output)
             write_output(
@@ -108,6 +154,7 @@ def main(argv=None):
                 l2=args.l2,
                 seed=args.seed,
                 tree_iterations=args.tree_iterations,
+                allow_reconstructed=args.allow_reconstructed,
             )
             write_output(report, args.output)
             write_output(

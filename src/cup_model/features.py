@@ -32,6 +32,12 @@ FEATURES = (
     "sectional_missing",
     "distance_age",
     "ground_weight",
+    "win_rate_120d",
+    "market_surplus_120d",
+    "weight_missing",
+    "age_missing",
+    "draw_missing",
+    "going_missing",
 )
 
 
@@ -57,28 +63,43 @@ def market_probabilities(odds) -> np.ndarray:
 
 
 def build_race(dataset: Dataset, snapshot: Snapshot, labels_as_of: datetime | None = None) -> Race:
-    histories = dataset.results_as_of(snapshot.cutoff)
     active = sorted((r for r in snapshot.runners if r.status == "active"), key=lambda r: r.horse_id)
-    weights = np.array([r.weight_kg for r in active])
-    ages = np.array([r.age_years for r in active])
+    weights = np.array([r.weight_kg for r in active], dtype=float)
+    ages = np.array([r.age_years for r in active], dtype=float)
+    weight_mean = np.nanmean(weights) if np.isfinite(weights).any() else np.nan
+    age_mean = np.nanmean(ages) if np.isfinite(ages).any() else np.nan
+    barriers = [r.barrier_effective or r.barrier_drawn for r in active]
+    draw_max = max((b for b in barriers if b is not None), default=1)
     rows = []
     used = {}
     for runner in active:
-        past = []
-        for result in histories.values():
-            if result.race_id == snapshot.race_id:
-                continue
-            for finish in result.finishes:
-                if finish.horse_id == runner.horse_id:
-                    if result.synthetic != snapshot.synthetic:
-                        raise ValueError("synthetic and real histories cannot be mixed")
-                    past.append((result, finish))
-                    used[result.race_id] = result
-        past.sort(key=lambda item: item[0].race_start)
+        past = [
+            (result, finish)
+            for result, finish in dataset.horse_history(runner.horse_id, snapshot.cutoff)
+            if result.race_id != snapshot.race_id
+        ]
+        for result, _ in past:
+            if result.synthetic != snapshot.synthetic:
+                raise ValueError("synthetic and real histories cannot be mixed")
+            used[result.race_id] = result
         days = np.array([(snapshot.cutoff - r.race_start).total_seconds() / 86400 for r, _ in past])
         decay = np.exp2(-days / 120)
         form = np.array(
-            [1 - ((f.position or len(r.finishes)) - 1) / (len(r.finishes) - 1) for r, f in past]
+            [
+                np.nan
+                if f.status == "unplaced_unknown"
+                else 1 - ((f.position or len(r.finishes)) - 1) / (len(r.finishes) - 1)
+                for r, f in past
+            ]
+        )
+        wins = np.array([float(f.position == 1) for _, f in past])
+        surplus = np.array(
+            [
+                float(f.position == 1) - f.prior_market_probability
+                if f.prior_market_probability is not None
+                else np.nan
+                for _, f in past
+            ]
         )
         rating = np.array([f.rating if f.rating is not None else np.nan for _, f in past])
 
@@ -92,21 +113,31 @@ def build_race(dataset: Dataset, snapshot: Snapshot, labels_as_of: datetime | No
         last_rating = ratings_valid[-1] if len(ratings_valid) else np.nan
         last = past[-1] if past else None
         staying = np.array([r.distance_m >= 2400 for r, _ in past], dtype=bool)
-        ground = np.array([abs(r.going - snapshot.going) <= 1 for r, _ in past], dtype=bool)
+        ground = np.array(
+            [
+                r.going is not None
+                and snapshot.going is not None
+                and abs(r.going - snapshot.going) <= 1
+                for r, _ in past
+            ],
+            dtype=bool,
+        )
         barrier = runner.barrier_effective or runner.barrier_drawn
+        age = runner.age_years if runner.age_years is not None else np.nan
+        weight = runner.weight_kg if runner.weight_kg is not None else np.nan
         rows.append(
             [
-                runner.weight_kg,
-                barrier / max(r.barrier_drawn for r in snapshot.runners),
+                weight,
+                barrier / draw_max if barrier is not None else np.nan,
                 float(runner.barrier_effective is None),
-                runner.age_years,
-                runner.weight_kg - weights.mean(),
-                runner.age_years - ages.mean(),
+                age,
+                weight - weight_mean,
+                age - age_mean,
                 len(past),
                 min(days) if len(days) else np.nan,
                 float(np.sum(days <= 60)),
                 average(form),
-                float(np.std(form)) if len(form) else np.nan,
+                float(np.nanstd(form)) if np.isfinite(form).any() else np.nan,
                 form[-1] if len(form) else np.nan,
                 average(form, staying),
                 average(form, ground),
@@ -121,8 +152,14 @@ def build_race(dataset: Dataset, snapshot: Snapshot, labels_as_of: datetime | No
                 (snapshot.distance_m - last[0].distance_m) / 1000 if last else np.nan,
                 last[1].final_600_s if last and last[1].final_600_s is not None else np.nan,
                 float(not last or last[1].final_600_s is None),
-                snapshot.distance_m / 1000 * runner.age_years,
-                snapshot.going * (runner.weight_kg - weights.mean()),
+                snapshot.distance_m / 1000 * age,
+                snapshot.going * (weight - weight_mean) if snapshot.going is not None else np.nan,
+                average(wins),
+                average(surplus),
+                float(runner.weight_kg is None),
+                float(runner.age_years is None),
+                float(barrier is None),
+                float(snapshot.going is None),
             ]
         )
     market = None
@@ -130,7 +167,7 @@ def build_race(dataset: Dataset, snapshot: Snapshot, labels_as_of: datetime | No
         market = market_probabilities([r.decimal_odds for r in active])
     target = None
     if labels_as_of is not None:
-        result = dataset.results_as_of(labels_as_of).get(snapshot.race_id)
+        result = dataset.result_as_of(snapshot.race_id, labels_as_of)
         if result is None:
             raise ValueError(f"result unavailable for {snapshot.race_id} at label cutoff")
         if result.synthetic != snapshot.synthetic:
@@ -142,7 +179,7 @@ def build_race(dataset: Dataset, snapshot: Snapshot, labels_as_of: datetime | No
         winners = {f.horse_id for f in result.finishes if f.position == 1}
         target = np.array([float(r.horse_id in winners) / len(winners) for r in active])
     provenance = [snapshot.model_dump(mode="json")]
-    provenance.extend(used[k].model_dump(mode="json") for k in sorted(used))
+    provenance.extend(dataset.result_hash(used[k]) for k in sorted(used))
     return Race(
         snapshot,
         tuple(r.horse_id for r in active),

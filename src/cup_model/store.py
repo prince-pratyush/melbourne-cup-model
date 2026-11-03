@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -78,6 +79,33 @@ class Dataset:
     def __init__(self, records: list[Snapshot | Result]):
         self.snapshots = [r for r in records if isinstance(r, Snapshot)]
         self.results = [r for r in records if isinstance(r, Result)]
+        self._race_results = defaultdict(list)
+        self._horse_results = defaultdict(list)
+        self._hashes = {}
+        for result in sorted(self.results, key=lambda r: r.available_at):
+            self._race_results[result.race_id].append(result)
+            for finish in result.finishes:
+                self._horse_results[finish.horse_id].append((result, finish))
+
+    def result_hash(self, result: Result) -> str:
+        key = id(result)
+        if key not in self._hashes:
+            self._hashes[key] = digest(result.model_dump(mode="json"))
+        return self._hashes[key]
+
+    def result_as_of(self, race_id: str, cutoff: datetime) -> Result | None:
+        return next(
+            (r for r in reversed(self._race_results[race_id]) if r.available_at <= cutoff), None
+        )
+
+    def horse_history(self, horse_id: str, cutoff: datetime):
+        latest = {}
+        for result, finish in self._horse_results[horse_id]:
+            if result.available_at > cutoff:
+                break
+            if result.race_start < cutoff:
+                latest[result.race_id] = (result, finish)
+        return sorted(latest.values(), key=lambda item: item[0].race_start)
 
     def results_as_of(self, cutoff: datetime) -> dict[str, Result]:
         latest = {}

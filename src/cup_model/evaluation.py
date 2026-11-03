@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime
 
 import numpy as np
@@ -9,7 +10,9 @@ from cup_model.pipeline import session_date, train
 from cup_model.store import Dataset
 
 
-def race_metrics(race: Race, probabilities: np.ndarray):
+def race_metrics(race: Race, probabilities: np.ndarray, market_tiebreak=True):
+    if not market_tiebreak:
+        race = replace(race, market=None)
     if race.y is None:
         raise ValueError("evaluation needs an official result")
     chosen = select(race, probabilities)
@@ -69,6 +72,7 @@ def backtest(
     l2: float = 1,
     seed: int = 42,
     tree_iterations: int = 500,
+    allow_reconstructed: bool = False,
 ):
     if start >= score_as_of:
         raise ValueError("backtest start must precede score cutoff")
@@ -91,12 +95,16 @@ def backtest(
             l2=l2,
             seed=seed,
             tree_iterations=tree_iterations,
+            allow_reconstructed=allow_reconstructed,
         )
         for snapshot in targets:
             race = build_race(dataset, snapshot, score_as_of)
             p = forecaster.probabilities(race)
             baseline = np.full(len(p), 1 / len(p))
-            metrics = {"model": race_metrics(race, p), "uniform": race_metrics(race, baseline)}
+            metrics = {
+                "model": race_metrics(race, p),
+                "uniform": race_metrics(race, baseline, market_tiebreak=False),
+            }
             if race.market is not None:
                 metrics["market"] = race_metrics(race, race.market)
             for estimate, observed in zip(p, race.y, strict=True):
