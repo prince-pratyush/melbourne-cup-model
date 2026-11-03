@@ -426,6 +426,12 @@ def prepare(destination: str | Path, minimum_distance=2000, maximum_distance=360
                     continue
                 snapshot, result = records
                 year = str(snapshot.cutoff.astimezone(ZoneInfo("Australia/Sydney")).year)
+                secondary = None
+                if snapshot.venue == "Flemington" and snapshot.distance_m == 3200:
+                    secondary = next((c for c in catalog["cups"] if c["year"] == int(year)), None)
+                if secondary:
+                    snapshot, result, skipped = enrich_cup(snapshot, result, secondary)
+                    counts["cup_fields_" + (skipped or "applied")] += 1
                 info = years.setdefault(year, {"races": 0, "runners": 0, "history_races": 0})
                 counts["history_races"] += 1
                 counts["history_runner_rows"] += len(rows)
@@ -439,23 +445,22 @@ def prepare(destination: str | Path, minimum_distance=2000, maximum_distance=360
                 info["races"] += 1
                 info["runners"] += len(rows)
                 output.write(snapshot.model_dump_json() + "\n")
-                if snapshot.venue == "Flemington" and snapshot.distance_m == 3200:
-                    secondary = next((c for c in catalog["cups"] if c["year"] == int(year)), None)
-                    if secondary:
-                        names = {normalize_name(r["SELECTION_NAME"]) for r in rows}
-                        other = {normalize_name(r["name"]) for r in secondary["runners"]}
-                        winner = [r["SELECTION_NAME"] for r in rows if r["WIN_RESULT"] == "WINNER"]
-                        cup_rows.append(
-                            {
-                                "year": int(year),
-                                "race_id": snapshot.race_id,
-                                "runners": len(rows),
-                                "winner": winner,
-                                "full_field_matches_secondary": names == other,
-                                "names_only_in_market": sorted(names - other),
-                                "names_only_in_secondary": sorted(other - names),
-                            }
-                        )
+                if secondary:
+                    names = {normalize_name(r["SELECTION_NAME"]) for r in rows}
+                    other = {normalize_name(r["name"]) for r in secondary["runners"]}
+                    winner = [r["SELECTION_NAME"] for r in rows if r["WIN_RESULT"] == "WINNER"]
+                    cup_rows.append(
+                        {
+                            "year": int(year),
+                            "race_id": snapshot.race_id,
+                            "runners": len(rows),
+                            "winner": winner,
+                            "full_field_matches_secondary": names == other,
+                            "names_only_in_market": sorted(names - other),
+                            "names_only_in_secondary": sorted(other - names),
+                            "cup_fields": skipped or "applied",
+                        }
+                    )
     report = {
         "counts": dict(counts),
         "rejection_examples": rejection_examples,
