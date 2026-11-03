@@ -4,7 +4,13 @@ from datetime import timedelta
 import numpy as np
 import pytest
 
-from cup_model.acquisition import convert_market, parse_clock, parse_cup, parse_official_history
+from cup_model.acquisition import (
+    convert_market,
+    enrich_cup,
+    parse_clock,
+    parse_cup,
+    parse_official_history,
+)
 from cup_model.contracts import Snapshot
 from cup_model.features import FEATURES, build_race
 from cup_model.pipeline import train
@@ -159,3 +165,49 @@ def test_official_history_parser_requires_correct_table():
     assert parse_official_history(html)[2006]["weight_kg"] == "53"
     with pytest.raises(ValueError):
         parse_official_history("<html></html>")
+
+
+def cup_archive(first="Synthetic A", second="Synthetic B", second_finish="DNF"):
+    return {
+        "source": {"url": "https://example.invalid/cup"},
+        "runners": [
+            {
+                "name": first,
+                "finish": "1st",
+                "weight_kg": 53.0,
+                "barrier_effective": 4,
+                "age_reported": 5,
+            },
+            {
+                "name": second,
+                "finish": second_finish,
+                "weight_kg": 57.5,
+                "barrier_effective": 1,
+                "age_reported": 7,
+            },
+        ],
+    }
+
+
+def test_cup_archive_fills_fields_and_finish_order(market_rows):
+    (snapshot, result), _ = convert_market(market_rows, SOURCE)
+    snapshot, result, reason = enrich_cup(snapshot, result, cup_archive())
+    assert reason is None
+    assert [(r.weight_kg, r.barrier_effective, r.age_years) for r in snapshot.runners] == [
+        (53, 4, 5),
+        (57.5, 1, 7),
+    ]
+    assert [(f.position, f.status) for f in result.finishes] == [
+        (1, "finished"),
+        (None, "non_finisher"),
+    ]
+    race = build_race(Dataset([snapshot, result]), snapshot, result.available_at)
+    np.testing.assert_equal(race.x[:, FEATURES.index("weight_kg")], [53, 57.5])
+
+
+def test_cup_archive_requires_matching_field_and_winner(market_rows):
+    (snapshot, result), _ = convert_market(market_rows, SOURCE)
+    unchanged = enrich_cup(snapshot, result, cup_archive(second="Other"))
+    assert unchanged == (snapshot, result, "field_mismatch")
+    swapped = enrich_cup(snapshot, result, cup_archive("Synthetic B", "Synthetic A", "2nd"))
+    assert swapped == (snapshot, result, "winner_mismatch")

@@ -171,6 +171,34 @@ def parse_cup(html: str, year: int):
     return {"year": year, "starters": len(runners), "runners": runners, "scratchings": scratchings}
 
 
+def enrich_cup(snapshot: Snapshot, result: Result, cup: dict):
+    rows = {normalize_name(r["name"]): r for r in cup["runners"]}
+    names = {r.horse_id: normalize_name(r.name) for r in snapshot.runners}
+    if set(names.values()) != set(rows):
+        return snapshot, result, "field_mismatch"
+    places = {}
+    for horse_id, name in names.items():
+        place = re.fullmatch(r"(\d+)(?:st|nd|rd|th)", rows[name]["finish"])
+        places[horse_id] = int(place.group(1)) if place else None
+    winners = {f.horse_id for f in result.finishes if f.position == 1}
+    if winners != {h for h, p in places.items() if p == 1}:
+        return snapshot, result, "winner_mismatch"
+    data = snapshot.model_dump(mode="json")
+    data["source"] += " " + cup["source"]["url"]
+    for runner in data["runners"]:
+        row = rows[normalize_name(runner["name"])]
+        runner["weight_kg"] = row["weight_kg"]
+        runner["barrier_effective"] = row["barrier_effective"]
+        runner["age_years"] = row["age_reported"]
+    finishes = result.model_dump(mode="json")
+    finishes["source"] += " " + cup["source"]["url"]
+    for finish in finishes["finishes"]:
+        position = places[finish["horse_id"]]
+        finish["position"] = position
+        finish["status"] = "finished" if position else "non_finisher"
+    return Snapshot.model_validate(data), Result.model_validate(finishes), None
+
+
 def parse_official_history(html: str):
     table = Table("melbournecup-history-table")
     table.feed(html)
