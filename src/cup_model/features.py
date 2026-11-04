@@ -38,6 +38,8 @@ FEATURES = (
     "age_missing",
     "draw_missing",
     "going_missing",
+    "place_rate_120d",
+    "last_placed",
 )
 
 
@@ -93,6 +95,7 @@ def build_race(dataset: Dataset, snapshot: Snapshot, labels_as_of: datetime | No
             ]
         )
         wins = np.array([float(f.position == 1) for _, f in past])
+        placed = np.array([np.nan if f.placed is None else float(f.placed) for _, f in past])
         surplus = np.array(
             [
                 float(f.position == 1) - f.prior_market_probability
@@ -160,6 +163,8 @@ def build_race(dataset: Dataset, snapshot: Snapshot, labels_as_of: datetime | No
                 float(runner.age_years is None),
                 float(barrier is None),
                 float(snapshot.going is None),
+                average(placed),
+                placed[-1] if len(placed) else np.nan,
             ]
         )
     market = None

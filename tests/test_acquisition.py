@@ -232,3 +232,21 @@ def test_place_result_is_recorded_when_published(market_rows):
     market_rows[1]["PLACE_RESULT"] = ""
     (_, result), _ = convert_market(market_rows, SOURCE)
     assert result.finishes[1].placed is None
+
+
+def test_place_features_use_prior_place_results(market_rows):
+    market_rows[0]["PLACE_RESULT"] = "WINNER"
+    market_rows[1]["PLACE_RESULT"] = "LOSER"
+    (snapshot, result), _ = convert_market(market_rows, SOURCE)
+    later = snapshot.model_copy(
+        update={
+            "race_id": "future",
+            "scheduled_start": snapshot.scheduled_start + timedelta(days=7),
+            "cutoff": snapshot.cutoff + timedelta(days=7),
+            "available_at": snapshot.available_at + timedelta(days=7),
+        }
+    )
+    race = build_race(Dataset([snapshot, result]), later)
+    np.testing.assert_equal(race.x[:, FEATURES.index("place_rate_120d")], [1, 0])
+    np.testing.assert_equal(race.x[:, FEATURES.index("last_placed")], [1, 0])
+    assert np.all(np.isnan(build_race(Dataset([snapshot, result]), snapshot).x[:, -1]))
