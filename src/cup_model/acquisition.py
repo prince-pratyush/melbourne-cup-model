@@ -395,6 +395,7 @@ def convert_market(rows: list[dict], source: dict, minimum_distance=2000, maximu
                 position=1 if r["WIN_RESULT"] == "WINNER" else None,
                 status="finished" if r["WIN_RESULT"] == "WINNER" else "unplaced_unknown",
                 prior_market_probability=float(p),
+                placed={"WINNER": True, "LOSER": False}.get(r.get("PLACE_RESULT")),
             )
             for r, p in zip(rows, q, strict=True)
         ),

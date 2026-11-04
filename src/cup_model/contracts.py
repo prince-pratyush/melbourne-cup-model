@@ -84,6 +84,7 @@ class Finish(Record):
     rating: Number | None = None
     final_600_s: Number | None = Field(default=None, gt=0)
     prior_market_probability: Number | None = Field(default=None, gt=0, le=1)
+    placed: bool | None = None
 
     @model_validator(mode="after")
     def validate_finish(self):

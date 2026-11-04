@@ -222,3 +222,13 @@ def test_market_uses_back_lay_midpoint_with_back_fallback(market_rows):
     market_rows[0]["BEST_AVAIL_LAY_AT_SCHEDULED_OFF"] = "1000"
     (snapshot, _), _ = convert_market(market_rows, SOURCE)
     assert snapshot.runners[0].decimal_odds == 2
+
+
+def test_place_result_is_recorded_when_published(market_rows):
+    market_rows[0]["PLACE_RESULT"] = "WINNER"
+    market_rows[1]["PLACE_RESULT"] = "LOSER"
+    (_, result), _ = convert_market(market_rows, SOURCE)
+    assert [f.placed for f in result.finishes] == [True, False]
+    market_rows[1]["PLACE_RESULT"] = ""
+    (_, result), _ = convert_market(market_rows, SOURCE)
+    assert result.finishes[1].placed is None
