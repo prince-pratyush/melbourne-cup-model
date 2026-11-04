@@ -301,6 +301,17 @@ def parse_clock(day: str, clock: str, state: str):
     )
 
 
+def scheduled_odds(row: dict) -> float:
+    back = float(row["BEST_AVAIL_BACK_AT_SCHEDULED_OFF"])
+    try:
+        lay = float(row["BEST_AVAIL_LAY_AT_SCHEDULED_OFF"])
+    except (KeyError, ValueError):
+        return back
+    if not back <= lay < 1000:
+        return back
+    return 2 / (1 / back + 1 / lay)
+
+
 def convert_market(rows: list[dict], source: dict, minimum_distance=2000, maximum_distance=3600):
     first = rows[0]
     state = first["STATE_CODE"]
@@ -334,13 +345,14 @@ def convert_market(rows: list[dict], source: dict, minimum_distance=2000, maximu
         return None, "duplicate_or_small_field"
     if not any(r["WIN_RESULT"] == "WINNER" for r in rows):
         return None, "no_winner"
-    quote_column = "BEST_AVAIL_BACK_AT_SCHEDULED_OFF"
     try:
-        prices = [float(r[quote_column]) for r in rows]
+        backs = [float(r["BEST_AVAIL_BACK_AT_SCHEDULED_OFF"]) for r in rows]
+        market_probabilities(backs)
+        prices = [scheduled_odds(r) for r in rows]
         q = market_probabilities(prices)
     except (KeyError, ValueError):
         return None, "missing_scheduled_off_quotes"
-    book = sum(1 / price for price in prices)
+    book = sum(1 / price for price in backs)
     if not 0.85 <= book <= 1.20:
         return None, "implausible_or_incomplete_book"
     start = parse_clock(first["LOCAL_MEETING_DATE"], first["SCHEDULED_RACE_TIME"], state)
@@ -363,7 +375,7 @@ def convert_market(rows: list[dict], source: dict, minimum_distance=2000, maximu
         source=source_url,
         distance_m=distance,
         venue=first["TRACK"],
-        market_operator="Betfair scheduled-off back",
+        market_operator="Betfair scheduled-off back/lay mid",
         market_at=start,
         expected_starters=len(rows),
         runners=runners,
@@ -483,7 +495,7 @@ def prepare(destination: str | Path, minimum_distance=2000, maximum_distance=360
         ],
         "timing": {
             "prediction_edition": "scheduled_off_reconstruction",
-            "price_column": "BEST_AVAIL_BACK_AT_SCHEDULED_OFF",
+            "price_column": "BEST_AVAIL_BACK/LAY_AT_SCHEDULED_OFF midpoint",
             "excluded_columns": ["WIN_BSP", "WIN_PREPLAY_LAST_PRICE_TAKEN", "WIN_INPLAY_*"],
             "result_availability": "actual off plus two days; explicit conservative assumption",
             "timezone_basis": "Australia/Sydney inferred from cross-checks; not venue local time",

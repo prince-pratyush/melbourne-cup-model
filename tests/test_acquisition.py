@@ -211,3 +211,14 @@ def test_cup_archive_requires_matching_field_and_winner(market_rows):
     assert unchanged == (snapshot, result, "field_mismatch")
     swapped = enrich_cup(snapshot, result, cup_archive("Synthetic B", "Synthetic A", "2nd"))
     assert swapped == (snapshot, result, "winner_mismatch")
+
+
+def test_market_uses_back_lay_midpoint_with_back_fallback(market_rows):
+    market_rows[0]["BEST_AVAIL_LAY_AT_SCHEDULED_OFF"] = "2.5"
+    market_rows[1]["BEST_AVAIL_LAY_AT_SCHEDULED_OFF"] = "1.5"
+    (snapshot, _), _ = convert_market(market_rows, SOURCE)
+    assert snapshot.runners[0].decimal_odds == pytest.approx(2 / (1 / 2 + 1 / 2.5))
+    assert snapshot.runners[1].decimal_odds == 2
+    market_rows[0]["BEST_AVAIL_LAY_AT_SCHEDULED_OFF"] = "1000"
+    (snapshot, _), _ = convert_market(market_rows, SOURCE)
+    assert snapshot.runners[0].decimal_odds == 2
