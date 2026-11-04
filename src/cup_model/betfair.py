@@ -2,10 +2,20 @@ import json
 import os
 import urllib.parse
 import urllib.request
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 LOGIN_URL = "https://identitysso.betfair.com.au/api/login"
 BETTING_URL = "https://api.betfair.com/exchange/betting/json-rpc/v1"
 ENVIRONMENT = ("BETFAIR_APP_KEY", "BETFAIR_USERNAME", "BETFAIR_PASSWORD")
+PROJECTION = [
+    "EVENT",
+    "MARKET_START_TIME",
+    "MARKET_DESCRIPTION",
+    "RUNNER_DESCRIPTION",
+    "RUNNER_METADATA",
+]
+STAMP = "%Y-%m-%dT%H:%M:%SZ"
 
 
 def post(url: str, body: bytes, headers: dict) -> dict:
@@ -59,3 +69,46 @@ class Client:
         if "error" in reply:
             raise ValueError(f"Betfair {method} failed: {reply['error']}")
         return reply["result"]
+
+
+def record(client: Client, destination, minutes_ahead=30, clock=lambda: datetime.now(UTC)):
+    start = clock()
+    window = {
+        "from": start.strftime(STAMP),
+        "to": (start + timedelta(minutes=minutes_ahead)).strftime(STAMP),
+    }
+    catalogue = client.call(
+        "listMarketCatalogue",
+        {
+            "filter": {
+                "eventTypeIds": ["7"],
+                "marketCountries": ["AU"],
+                "marketTypeCodes": ["WIN"],
+                "marketStartTime": window,
+            },
+            "marketProjection": PROJECTION,
+            "maxResults": 100,
+        },
+    )
+    if len(catalogue) >= 100:
+        raise ValueError("catalogue may be truncated; lower --minutes-ahead")
+    ids = [market["marketId"] for market in catalogue]
+    books = {}
+    for i in range(0, len(ids), 40):
+        for book in client.call(
+            "listMarketBook",
+            {"marketIds": ids[i : i + 40], "priceProjection": {"priceData": ["EX_BEST_OFFERS"]}},
+        ):
+            books[book["marketId"]] = book
+    recorded_at = clock().isoformat()
+    path = Path(destination) / f"{start.date().isoformat()}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as stream:
+        for market in catalogue:
+            line = {
+                "recorded_at": recorded_at,
+                "catalogue": market,
+                "book": books.get(market["marketId"]),
+            }
+            stream.write(json.dumps(line, sort_keys=True) + "\n")
+    return {"markets": len(catalogue), "file": str(path), "recorded_at": recorded_at}

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from cup_model.acquisition import acquire, prepare
 from cup_model.audit import historical_audit
+from cup_model.betfair import Client, record
 from cup_model.contracts import Result, Snapshot, timestamp
 from cup_model.demo import generate
 from cup_model.evaluation import backtest
@@ -29,6 +30,11 @@ def parser():
     preparation.add_argument("--destination", required=True)
     preparation.add_argument("--minimum-distance", type=int, default=2000)
     preparation.add_argument("--maximum-distance", type=int, default=3600)
+    recording = commands.add_parser(
+        "record", help="capture upcoming AU win markets from the Betfair API"
+    )
+    recording.add_argument("--destination", required=True)
+    recording.add_argument("--minutes-ahead", type=int, default=30)
     demo = commands.add_parser("demo", help="generate explicitly synthetic pipeline inputs")
     demo.add_argument("--output", required=True)
     demo.add_argument("--days", type=int, default=40)
@@ -92,6 +98,9 @@ def main(argv=None):
             return
         if args.command == "prepare":
             write_output(prepare(args.destination, args.minimum_distance, args.maximum_distance))
+            return
+        if args.command == "record":
+            write_output(record(Client.from_env(), args.destination, args.minutes_ahead))
             return
         if args.command == "demo":
             write_output(generate(args.output, args.days, args.seed))
